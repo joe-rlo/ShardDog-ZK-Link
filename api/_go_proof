@@ -1,0 +1,96 @@
+// api/proof.go
+package handler
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"time"
+)
+
+type ReputationData struct {
+	SomeAttribute int `json:"some_attribute"`
+}
+
+type Metadata struct {
+	TokenID string `json:"token_id"`
+	Title string `json:"title"`
+	Description string `json:"description"`
+	Media string `json:"media"`
+	Extra ReputationData `json:"extra"`
+	ReceiverID string `json:"receiver_id"`
+}
+
+func getReputation(wallet string) (*ReputationData, error) {
+	resp, err := http.Get(fmt.Sprintf("https://auth.shard.dog/wallet/%s", wallet))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var data ReputationData
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var data struct {
+		AccountID1 string `json:"accountId1"`
+		AccountID2 string `json:"accountId2"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&data)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	reputationData1, err := getReputation(data.AccountID1)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to fetch reputation data for account 1: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	reputationData2, err := getReputation(data.AccountID2)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to fetch reputation data for account 2: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Generate the zk-SNARK proof here
+	proof := reputationData2.SomeAttribute * reputationData2.SomeAttribute
+
+	timestamp := time.Now().Unix()
+	metadata := Metadata{
+		TokenID: fmt.Sprintf("token-%d", timestamp),
+		Title: "ShardDog Account Zk Link",
+		Description: fmt.Sprintf("%d", proof),
+		Media: "https://nftstorage.link/ipfs/bafybeidmtqiei2upy2f3dynjaeecyoj6e7outsd2ioyco2et7vbkyuh3ay",
+		Extra: *reputationData2,
+		ReceiverID: data.AccountID1,
+	}
+
+	metadataJson, err := json.Marshal(metadata)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Return the proof as JSON
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(metadataJson)
+}
